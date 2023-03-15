@@ -50,9 +50,12 @@ fn main() -> ExitCode {
             if is_plausibly_obj_sha(obj_sha) {
                 let p = obj_path_from_sha(obj_sha);
                 if let Ok(blobfile) = File::open(p) {
-                    let (objtype, objsz, mut reader) = object_decoder(blobfile);
-                    std::io::copy(&mut reader, &mut std::io::stdout());
-                    return ExitCode::SUCCESS;
+                    let (_objtype, _objsz, mut reader) = object_decoder(blobfile);
+                    if let Err(_) = std::io::copy(&mut reader, &mut std::io::stdout()) {
+                        return ExitCode::FAILURE;
+                    } else {
+                        return ExitCode::SUCCESS;
+                    }
                 } else {
                     return ret_invalid_objsha;
                 }
@@ -92,9 +95,10 @@ fn object_decoder(object: File) -> (ObjType, usize, BufReader<ZlibDecoder<File>>
     let mut objsz = vec![];
     match &magic {
         b"blob " => {
-            brzdf.read_until(0u8, &mut objsz);
+            brzdf.read_until(0u8, &mut objsz).expect("object has >5 bytes");
             objsz.pop(); // remove terminating null byte before parsing
-            let objsz = usize::from_str(&String::from_utf8(objsz).unwrap()).expect("blob header concludes with object len");
+            let objsz = usize::from_str(&String::from_utf8(objsz).unwrap())
+                .expect("blob header concludes with object len");
 
             return (ObjType::BLOB, objsz, brzdf);
         }
