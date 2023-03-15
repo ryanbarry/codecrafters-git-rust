@@ -47,6 +47,9 @@
           nativeBuildInputs = [ pkg-config ];
           buildInputs = [ openssl toolchain rustPackages.clippy ];
           RUST_LOG = "trace";
+          shellHook = ''
+          alias mygit="! [[ "\$\(pwd\)" == \"/tmp/testing\" ]] && echo \"unsafe! not in /tmp/testing\" || $PWD/your_git.sh"
+          '';
         };
       });
 }
