@@ -37,7 +37,7 @@ fn main() -> ExitCode {
             std::fs::create_dir(".git/refs").unwrap();
             std::fs::write(".git/HEAD", "ref: refs/heads/master\n").unwrap();
             println!("Initialized git directory");
-            return ExitCode::SUCCESS;
+            ExitCode::SUCCESS
         }
         Commands::CatFile {
             pretty_print,
@@ -51,17 +51,17 @@ fn main() -> ExitCode {
                 let p = obj_path_from_sha(obj_sha);
                 if let Ok(blobfile) = File::open(p) {
                     let (_objtype, _objsz, mut reader) = object_decoder(blobfile);
-                    if let Err(_) = std::io::copy(&mut reader, &mut std::io::stdout()) {
-                        return ExitCode::FAILURE;
+                    if std::io::copy(&mut reader, &mut std::io::stdout()).is_err() {
+                        ExitCode::FAILURE
                     } else {
-                        return ExitCode::SUCCESS;
+                        ExitCode::SUCCESS
                     }
                 } else {
-                    return ret_invalid_objsha;
+                    ret_invalid_objsha
                 }
             } else {
                 println!("fatal: Not a valid object name {}", obj_sha);
-                return ret_invalid_objsha;
+                ret_invalid_objsha
             }
         }
     }
@@ -79,8 +79,8 @@ fn obj_path_from_sha(obj_sha: &str) -> PathBuf {
 }
 
 enum ObjType {
-    BLOB,
-    COMMIT,
+    Blob,
+    Commit,
     Tree,
 }
 
@@ -100,16 +100,16 @@ fn object_decoder(object: File) -> (ObjType, usize, BufReader<ZlibDecoder<File>>
             let objsz = usize::from_str(&String::from_utf8(objsz).unwrap())
                 .expect("blob header concludes with object len");
 
-            return (ObjType::BLOB, objsz, brzdf);
+            (ObjType::Blob, objsz, brzdf)
         }
         b"tree " => {
-            return (ObjType::Tree, 0, brzdf);
+            (ObjType::Tree, 0, brzdf)
         }
         b"commi" => {
-            return (ObjType::COMMIT, 0, brzdf);
+            (ObjType::Commit, 0, brzdf)
         }
         _ => {
-            return (ObjType::BLOB, 0, brzdf);
+            (ObjType::Blob, 0, brzdf)
         }
     }
 }
