@@ -1,8 +1,9 @@
-use std::fs;
+use std::fs::File;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use flate2::read::ZlibDecoder;
 
 #[derive(Parser, Debug)]
 struct Cli {
@@ -29,10 +30,10 @@ fn main() -> ExitCode {
 
     match &cli.command {
         Commands::Init => {
-            fs::create_dir(".git").unwrap();
-            fs::create_dir(".git/objects").unwrap();
-            fs::create_dir(".git/refs").unwrap();
-            fs::write(".git/HEAD", "ref: refs/heads/master\n").unwrap();
+            std::fs::create_dir(".git").unwrap();
+            std::fs::create_dir(".git/objects").unwrap();
+            std::fs::create_dir(".git/refs").unwrap();
+            std::fs::write(".git/HEAD", "ref: refs/heads/master\n").unwrap();
             println!("Initialized git directory");
             return ExitCode::SUCCESS;
         }
@@ -46,16 +47,15 @@ fn main() -> ExitCode {
             }
             if is_plausibly_blob_sha(blob_sha) {
                 let p = blob_path_from_sha(blob_sha);
-                println!("path to that blob: {:?}", p);
-                if p.exists() {
-                    println!("and it exists!");
+                if let Ok(blobfile) = File::open(p) {
+                    let mut z = ZlibDecoder::new(&blobfile);
+                    std::io::copy(&mut z, &mut std::io::stdout()).expect("failed to read blob");
                     return ExitCode::SUCCESS;
                 } else {
-                    println!("and it does not exist");
                     return ret_invalid_blobsha;
                 }
             } else {
-                println!("invalid blob_sha given: {}", blob_sha);
+                println!("fatal: Not a valid object name {}", blob_sha);
                 return ret_invalid_blobsha;
             }
         }
@@ -68,5 +68,7 @@ fn is_plausibly_blob_sha(maybe_blob_sha: &str) -> bool {
 
 fn blob_path_from_sha(blob_sha: &str) -> PathBuf {
     let (obj_dirname, obj_filename) = blob_sha.split_at(2);
-    [".git", "objects", obj_dirname, obj_filename].iter().collect()
+    [".git", "objects", obj_dirname, obj_filename]
+        .iter()
+        .collect()
 }
