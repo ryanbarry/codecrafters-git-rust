@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use clap::Parser;
 use flate2::read::ZlibDecoder;
+use sha1::{digest::FixedOutput, Digest, Sha1};
 
 mod cli;
 
@@ -51,6 +52,28 @@ fn main() -> ExitCode {
                 ret_invalid_objsha
             }
         }
+        Commands::HashObject { write: _, file: inputfile } => match File::open(inputfile) {
+            Ok(mut inputfile) => {
+                let mut hasher = Sha1::new_with_prefix("blob ");
+                hasher.update(inputfile.metadata().unwrap().len().to_string());
+                hasher.update([0u8]);
+                let mut buf = [0u8; 1024];
+                let mut bytes_read = inputfile.read(&mut buf).expect("no trouble reading file");
+                while bytes_read > 0 {
+                    hasher.update(&buf[..bytes_read]);
+                    bytes_read = inputfile.read(&mut buf).expect("no trouble reading file");
+                }
+
+                let hex_hash = hex::encode(hasher.finalize_fixed());
+
+                println!("{}", hex_hash);
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                println!("{}", e);
+                ExitCode::FAILURE
+            }
+        },
     }
 }
 

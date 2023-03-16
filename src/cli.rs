@@ -15,4 +15,10 @@ pub enum Commands {
         #[arg()]
         obj_sha: String,
     },
+    HashObject {
+        #[arg(short, help = "write the object into the object database")]
+        write: bool,
+        #[arg()]
+        file: String,
+    },
 }
