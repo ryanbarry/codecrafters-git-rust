@@ -4,31 +4,18 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use flate2::read::ZlibDecoder;
 
-#[derive(Parser, Debug)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
+mod cli;
 
-#[derive(Subcommand, Debug)]
-enum Commands {
-    Init,
-    CatFile {
-        #[arg(short, help = "pretty-print <object> content")]
-        pretty_print: bool,
-        #[arg()]
-        obj_sha: String,
-    },
-}
+use cli::{Args, Commands};
 
 fn main() -> ExitCode {
     let ret_not_impl: ExitCode = ExitCode::from(1);
     let ret_invalid_objsha: ExitCode = ExitCode::from(128);
 
-    let cli = Cli::parse();
+    let cli = Args::parse();
 
     match &cli.command {
         Commands::Init => {
@@ -95,21 +82,17 @@ fn object_decoder(object: File) -> (ObjType, usize, BufReader<ZlibDecoder<File>>
     let mut objsz = vec![];
     match &magic {
         b"blob " => {
-            brzdf.read_until(0u8, &mut objsz).expect("object has >5 bytes");
+            brzdf
+                .read_until(0u8, &mut objsz)
+                .expect("object has >5 bytes");
             objsz.pop(); // remove terminating null byte before parsing
             let objsz = usize::from_str(&String::from_utf8(objsz).unwrap())
                 .expect("blob header concludes with object len");
 
             (ObjType::Blob, objsz, brzdf)
         }
-        b"tree " => {
-            (ObjType::Tree, 0, brzdf)
-        }
-        b"commi" => {
-            (ObjType::Commit, 0, brzdf)
-        }
-        _ => {
-            (ObjType::Blob, 0, brzdf)
-        }
+        b"tree " => (ObjType::Tree, 0, brzdf),
+        b"commi" => (ObjType::Commit, 0, brzdf),
+        _ => (ObjType::Blob, 0, brzdf),
     }
 }
