@@ -18,7 +18,7 @@ fn main() -> ExitCode {
 
     let cli = Args::parse();
 
-    match &cli.command {
+    match cli.command {
         Commands::Init => {
             std::fs::create_dir(".git").unwrap();
             std::fs::create_dir(".git/objects").unwrap();
@@ -31,12 +31,12 @@ fn main() -> ExitCode {
             pretty_print,
             obj_sha,
         } => {
-            if !pretty_print {
+            if pretty_print == false {
                 println!("cat-file without pretty-print not implemented");
                 return ret_not_impl;
             }
-            if is_plausibly_obj_sha(obj_sha) {
-                let p = obj_path_from_sha(obj_sha);
+            if is_plausibly_obj_sha(&obj_sha) {
+                let p = obj_path_from_sha(&obj_sha);
                 if let Ok(blobfile) = File::open(p) {
                     let (_objtype, _objsz, mut reader) = object_decoder(blobfile);
                     if std::io::copy(&mut reader, &mut std::io::stdout()).is_err() {
@@ -52,7 +52,10 @@ fn main() -> ExitCode {
                 ret_invalid_objsha
             }
         }
-        Commands::HashObject { write: _, file: inputfile } => match File::open(inputfile) {
+        Commands::HashObject {
+            write: _,
+            file: inputfile,
+        } => match File::open(inputfile) {
             Ok(mut inputfile) => {
                 let mut hasher = Sha1::new_with_prefix("blob ");
                 hasher.update(inputfile.metadata().unwrap().len().to_string());
