@@ -58,15 +58,14 @@ fn main() -> ExitCode {
         } => match File::open(inputfile) {
             Ok(mut inputfile) => {
                 let mut hasher = Sha1::new_with_prefix("blob ");
-                hasher.update(inputfile.metadata().unwrap().len().to_string());
+                let filesz = inputfile.metadata().unwrap().len();
+                hasher.update(filesz.to_string());
                 hasher.update([0u8]);
                 let mut buf = [0u8; 1024];
-                let mut filesz = 0;
                 let mut bytes_read = inputfile
                     .read(&mut buf)
                     .expect("read given file for hashing");
                 while bytes_read > 0 {
-                    filesz += bytes_read;
                     hasher.update(&buf[..bytes_read]);
                     bytes_read = inputfile
                         .read(&mut buf)
