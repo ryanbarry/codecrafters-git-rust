@@ -1,11 +1,11 @@
-use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Seek, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 
 use clap::Parser;
-use flate2::read::ZlibDecoder;
+use flate2::{read::ZlibDecoder, write::ZlibEncoder};
 use sha1::{digest::FixedOutput, Digest, Sha1};
 
 mod cli;
@@ -53,7 +53,7 @@ fn main() -> ExitCode {
             }
         }
         Commands::HashObject {
-            write: _,
+            write: do_write,
             file: inputfile,
         } => match File::open(inputfile) {
             Ok(mut inputfile) => {
@@ -61,13 +61,66 @@ fn main() -> ExitCode {
                 hasher.update(inputfile.metadata().unwrap().len().to_string());
                 hasher.update([0u8]);
                 let mut buf = [0u8; 1024];
-                let mut bytes_read = inputfile.read(&mut buf).expect("no trouble reading file");
+                let mut filesz = 0;
+                let mut bytes_read = inputfile
+                    .read(&mut buf)
+                    .expect("read given file for hashing");
                 while bytes_read > 0 {
+                    filesz += bytes_read;
                     hasher.update(&buf[..bytes_read]);
-                    bytes_read = inputfile.read(&mut buf).expect("no trouble reading file");
+                    bytes_read = inputfile
+                        .read(&mut buf)
+                        .expect("read given file for hashing");
                 }
 
                 let hex_hash = hex::encode(hasher.finalize_fixed());
+
+                if do_write {
+                    inputfile
+                        .rewind()
+                        .expect("start reading given file from beginning to copy into obj db");
+                    let obj_db_path = obj_path_from_sha(&hex_hash);
+
+                    match obj_db_path.parent() {
+                        Some(obj_db_dir) => {
+                            if obj_db_dir.exists() {
+                                assert!(
+                                    obj_db_dir.is_dir(),
+                                    "object database should only have directories at top level"
+                                );
+                            } else {
+                                std::fs::create_dir(obj_db_dir)
+                                    .expect("successful creation of prefix dir in obj db");
+                            }
+                        }
+                        None => {
+                            panic!(
+                                "object path doesn't have two-char dir preceding filename: {}",
+                                obj_db_path.to_string_lossy()
+                            );
+                        }
+                    }
+
+                    match OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .open(obj_db_path)
+                    {
+                        Ok(outputfile) => {
+                            let mut outputfile =
+                                ZlibEncoder::new(outputfile, flate2::Compression::default());
+                            let header = format!("blob {}\0", filesz);
+                            outputfile
+                                .write_all(header.as_bytes())
+                                .expect("write header to object file in db");
+                            std::io::copy(&mut inputfile, &mut outputfile)
+                                .expect("copying given file's contents to object in db");
+                        }
+                        Err(e) => {
+                            panic!("object file can't be opened: {}", e);
+                        }
+                    }
+                }
 
                 println!("{}", hex_hash);
                 ExitCode::SUCCESS
