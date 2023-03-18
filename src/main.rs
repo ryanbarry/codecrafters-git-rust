@@ -53,20 +53,20 @@ fn main() -> ExitCode {
         }
         Commands::HashObject {
             write: do_write,
-            file: inputfile,
-        } => match File::open(inputfile) {
-            Ok(mut inputfile) => {
-                let hash = hash_file(&inputfile);
+            file: infilepath,
+        } => match File::open(infilepath) {
+            Ok(mut infilepath) => {
+                let hash = hash_file(&infilepath);
                 let hex_hash = hex::encode(hash);
 
                 if do_write {
-                    inputfile
+                    infilepath
                         .rewind()
                         .expect("start reading given file from beginning to copy into obj db");
 
                     let obj_db_path = obj_path_from_sha(&hex_hash);
 
-                    encode_object(&mut inputfile, obj_db_path);
+                    encode_object(&mut infilepath, obj_db_path);
                 }
 
                 println!("{}", hex_hash);
