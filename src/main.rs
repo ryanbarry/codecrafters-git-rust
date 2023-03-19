@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
 
+use anyhow::{ensure, Context, Result};
 use clap::Parser;
 use flate2::{read::ZlibDecoder, write::ZlibEncoder};
 
@@ -60,13 +61,18 @@ fn main() -> ExitCode {
                 let hex_hash = hex::encode(hash);
 
                 if do_write {
-                    infilepath
-                        .rewind()
-                        .expect("start reading given file from beginning to copy into obj db");
-
                     let obj_db_path = obj_path_from_sha(&hex_hash);
 
-                    encode_object(&mut infilepath, obj_db_path);
+                    if !obj_db_path.exists() {
+                        infilepath
+                            .rewind()
+                            .expect("start reading given file from beginning to copy into obj db");
+
+                        if let Err(e) = encode_object(&mut infilepath, obj_db_path) {
+                            println!("Error writing object to database:\n{}", e);
+                            return ExitCode::FAILURE;
+                        }
+                    }
                 }
 
                 println!("{}", hex_hash);
@@ -109,52 +115,59 @@ fn hash_file(mut f: &File) -> [u8; 20] {
     *h.as_mut()
 }
 
-fn encode_object<P: AsRef<Path>>(input: &mut File, obj_db_path: P) -> bool {
+fn encode_object<P: AsRef<Path>>(input: &mut File, obj_db_path: P) -> Result<()> {
     let obj_db_path = obj_db_path.as_ref();
     let filesz = input
         .metadata()
-        .expect("get input file metadata, for size")
+        .context("get input file metadata, for size")?
         .len();
 
-    match obj_db_path.parent() {
-        Some(obj_db_dir) => {
-            if obj_db_dir.exists() {
-                assert!(
-                    obj_db_dir.is_dir(),
-                    "object database should only have directories at top level"
-                );
-            } else {
-                std::fs::create_dir(obj_db_dir)
-                    .expect("successful creation of prefix dir in obj db");
-            }
-        }
-        None => {
-            panic!(
-                "object path doesn't have two-char dir preceding filename: {}",
-                obj_db_path.to_string_lossy()
-            );
-        }
+    let obj_db_dir = obj_db_path.parent().with_context(|| {
+        format!(
+            "object path doesn't have two-char dir preceding filename: {}",
+            obj_db_path.to_string_lossy()
+        )
+    })?;
+
+    if obj_db_dir.exists() {
+        ensure!(
+            obj_db_dir.is_dir(),
+            "object database should only have directories at top level"
+        );
+    } else {
+        std::fs::create_dir(obj_db_dir).context("creating prefix dir in obj db")?;
     }
 
-    match OpenOptions::new()
+    let outputfile = OpenOptions::new()
         .create(true)
         .write(true)
         .open(obj_db_path)
+        .context("Failed to open file for writing object to db")?;
+
+    let header = format!("blob {}\0", filesz);
+
+    let mut compressedout = ZlibEncoder::new(outputfile, flate2::Compression::default());
+
+    compressedout
+        .write_all(header.as_bytes())
+        .context("write header to object file in db")?;
+
+    std::io::copy(input, &mut compressedout)
+        .context("copying given file's contents to object in db")?;
+
     {
-        Ok(outputfile) => {
-            let mut outputfile = ZlibEncoder::new(outputfile, flate2::Compression::default());
-            let header = format!("blob {}\0", filesz);
-            outputfile
-                .write_all(header.as_bytes())
-                .expect("write header to object file in db");
-            std::io::copy(input, &mut outputfile)
-                .expect("copying given file's contents to object in db");
-            true
-        }
-        Err(e) => {
-            panic!("object file can't be opened: {}", e);
-        }
+        // set file read-only (i.e. 0400) once it's been written, as og impl does
+        let outputfile = compressedout.get_ref();
+        let mut perms = outputfile
+            .metadata()
+            .context("getting db obj file metadata, after writing")?
+            .permissions();
+        perms.set_readonly(true);
+        outputfile
+            .set_permissions(perms)
+            .context("setting permissions on db obj file after writing")?;
     }
+    Ok(())
 }
 
 enum ObjType {
