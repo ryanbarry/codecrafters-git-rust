@@ -21,4 +21,10 @@ pub enum Commands {
         #[arg()]
         file: String,
     },
+    LsTree {
+        #[arg(long, help = "list only filenames")]
+        name_only: bool,
+        #[arg(value_name = "tree-ish")]
+        tree_ish: String,
+    },
 }

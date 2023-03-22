@@ -15,6 +15,7 @@ use cli::{Args, Commands};
 fn main() -> ExitCode {
     let ret_not_impl: ExitCode = ExitCode::from(1);
     let ret_invalid_objsha: ExitCode = ExitCode::from(128);
+    let ret_bad_file = ExitCode::from(128);
 
     let cli = Args::parse();
 
@@ -83,6 +84,88 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Commands::LsTree {
+            name_only,
+            tree_ish,
+        } => {
+            let obj_path = obj_path_from_sha(&tree_ish);
+            if let Ok(objfile) = File::open(obj_path) {
+                match object_decoder(objfile) {
+                    (ObjType::Tree, _objsz, mut reader) => {
+                        let mut tree_ents: Vec<TreeEntry> = vec![];
+                        let mut pnbuf = vec![];
+                        loop {
+                            let mode: TreeObjMode;
+                            let otype: ObjType;
+                            let name: String;
+
+                            match reader.read_until(b' ', &mut pnbuf) {
+                                Ok(0) => {
+                                    // EOF
+                                    break;
+                                }
+                                Ok(_nbytes) => {
+                                    mode = TreeObjMode::from(&pnbuf);
+                                    otype = match mode {
+                                        TreeObjMode::Directory => ObjType::Tree,
+                                        TreeObjMode::Link => ObjType::Blob,
+                                        TreeObjMode::RegularFile => ObjType::Blob,
+                                    };
+                                }
+                                Err(e) => {
+                                    panic!("failed to read next tree entry up to the NUL separator before its sha: {}", e);
+                                }
+                            };
+                            pnbuf.clear();
+
+                            match reader.read_until(b'\0', &mut pnbuf) {
+                                Ok(0) => {
+                                    // EOF
+                                    break;
+                                }
+                                Ok(_nbytes) => {
+                                    pnbuf.pop();
+                                    name = String::from_utf8_lossy(&pnbuf).into();
+                                }
+                                Err(e) => {
+                                    panic!("failed to read the name after the tree entry's permissions: {}", e);
+                                }
+                            };
+                            pnbuf.clear();
+
+                            let mut hash = [0u8; 20];
+                            reader
+                                .read_exact(&mut hash)
+                                .expect("20 bytes after mode+name for the hash");
+
+                            let ent = TreeEntry {
+                                mode,
+                                otype,
+                                name,
+                                hash,
+                            };
+                            tree_ents.push(ent);
+                        }
+
+                        if name_only {
+                            for ent in tree_ents {
+                                println!("{}", ent.name);
+                            }
+                        } else {
+                            for ent in tree_ents {
+                                println!("{}", ent);
+                            }
+                        }
+                    }
+                    (objt, _, _) => {
+                        println!("fatal: not a tree object (found {})", objt.type_name());
+                        return ret_bad_file;
+                    }
+                }
+            }
+
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -170,23 +253,102 @@ fn encode_object<P: AsRef<Path>>(input: &mut File, obj_db_path: P) -> Result<()>
     Ok(())
 }
 
+#[allow(dead_code)]
 enum ObjType {
-    Blob,
+    None,
     Commit,
     Tree,
+    Blob,
+    Tag,
 }
+
+impl ObjType {
+    fn type_name(&self) -> &'static str {
+        match self {
+            ObjType::Commit => "commit",
+            ObjType::Tree => "tree",
+            ObjType::Blob => "blob",
+            ObjType::Tag => "tag",
+            _ => unimplemented!("unexpected object type for type_name()"),
+        }
+    }
+}
+
+trait DbObj {}
+
+//struct Blob {}
+
+#[derive(Debug)]
+enum TreeObjMode {
+    RegularFile,
+    Directory,
+    Link,
+}
+
+impl TreeObjMode {
+    fn from(bytes: &[u8]) -> Self {
+        match bytes[0] {
+            b'1' => match bytes[1] {
+                b'0' => Self::RegularFile,
+                b'2' => Self::Link,
+                unk => {
+                    unimplemented!("unknown object type: 0{:o}", unk);
+                }
+            },
+            b'4' => Self::Directory,
+            unk => {
+                unimplemented!("unknown object type: {:o}", unk);
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for TreeObjMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            TreeObjMode::Directory => write!(f, "040000"),
+            TreeObjMode::RegularFile => write!(f, "100644"),
+            omode => unimplemented!("can't display mode {:?}", omode),
+        }
+    }
+}
+
+struct TreeEntry {
+    mode: TreeObjMode,
+    otype: ObjType,
+    hash: [u8; 20],
+    name: String,
+}
+
+impl std::fmt::Display for TreeEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} {} {}\t{}",
+            self.mode,
+            self.otype.type_name(),
+            hex::encode(self.hash),
+            self.name
+        )
+    }
+}
+//struct Commit {}
+//struct Tag {}
 
 fn object_decoder(object: File) -> (ObjType, usize, BufReader<ZlibDecoder<File>>) {
     let mut z = ZlibDecoder::new(object);
 
-    let mut magic = [0u8; 5];
+    let mut magic = [0u8; 4];
     if let Err(e) = z.read_exact(&mut magic) {
         panic!("{}", e); // TODO
     }
     let mut brzdf = BufReader::new(z);
     let mut objsz = vec![];
     match &magic {
-        b"blob " => {
+        b"blob" => {
+            brzdf
+                .read_exact(&mut [0u8; 1])
+                .expect("to consume space before object length in header");
             brzdf
                 .read_until(0u8, &mut objsz)
                 .expect("object has >5 bytes");
@@ -196,8 +358,26 @@ fn object_decoder(object: File) -> (ObjType, usize, BufReader<ZlibDecoder<File>>
 
             (ObjType::Blob, objsz, brzdf)
         }
-        b"tree " => (ObjType::Tree, 0, brzdf),
-        b"commi" => (ObjType::Commit, 0, brzdf),
+        b"tree" => {
+            brzdf
+                .read_exact(&mut [0u8; 1])
+                .expect("to consume space before object length in header");
+            brzdf
+                .read_until(0u8, &mut objsz)
+                .expect("object has >5 bytes");
+            objsz.pop(); // remove terminating null byte before parsing
+            let objsz = usize::from_str(&String::from_utf8(objsz).unwrap())
+                .expect("blob header concludes with object len");
+
+            (ObjType::Tree, objsz, brzdf)
+        }
+        b"comm" => {
+            brzdf
+                .read_exact(&mut [0u8; 3])
+                .expect("to consume \"it \" before object length in header");
+            (ObjType::Commit, 0, brzdf)
+        }
+        b"tag " => (ObjType::Tag, 0, brzdf),
         _ => (ObjType::Blob, 0, brzdf),
     }
 }
