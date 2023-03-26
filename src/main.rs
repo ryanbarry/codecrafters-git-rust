@@ -185,9 +185,12 @@ fn main() -> ExitCode {
                     res.push(TreeEntry {
                         name: ent
                             .file_name()
-                            .unwrap_or_else(|| panic!(
-                                "entry `{}` has a file name since it isn't a dir",
-                                ent.to_string_lossy()))
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "entry `{}` has a file name since it isn't a dir",
+                                    ent.to_string_lossy()
+                                )
+                            })
                             .to_string_lossy()
                             .to_string(),
                         hash: entry_hash,
@@ -290,13 +293,23 @@ fn hash_tree(tree: Vec<TreeEntry>) -> Result<[u8; 20]> {
 
     let obj_db_path = obj_path_from_sha(&hex_hash);
     if !obj_db_path.exists() {
-        encode_object(ObjType::Tree, buf.reader(), bufsz.try_into().unwrap(), obj_db_path)
-            .context("encoding tree into db")?;
+        encode_object(
+            ObjType::Tree,
+            buf.reader(),
+            bufsz.try_into().unwrap(),
+            obj_db_path,
+        )
+        .context("encoding tree into db")?;
     }
     Ok(hash)
 }
 
-fn encode_object<P: AsRef<Path>, R: Read>(otype: ObjType, mut input: R, filesz: u64, obj_db_path: P) -> Result<()> {
+fn encode_object<P: AsRef<Path>, R: Read>(
+    otype: ObjType,
+    mut input: R,
+    filesz: u64,
+    obj_db_path: P,
+) -> Result<()> {
     let obj_db_path = obj_db_path.as_ref();
 
     let obj_db_dir = obj_db_path.parent().with_context(|| {
