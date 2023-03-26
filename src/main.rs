@@ -56,31 +56,10 @@ fn main() -> ExitCode {
         Commands::HashObject {
             write: do_write,
             file: infilepath,
-        } => match File::open(infilepath) {
-            Ok(mut infilepath) => {
-                let hash = hash_file(&infilepath);
-                let hex_hash = hex::encode(hash);
-
-                if do_write {
-                    let obj_db_path = obj_path_from_sha(&hex_hash);
-
-                    if !obj_db_path.exists() {
-                        infilepath
-                            .rewind()
-                            .expect("start reading given file from beginning to copy into obj db");
-
-                        if let Err(e) = encode_object(&mut infilepath, obj_db_path) {
-                            println!("Error writing object to database:\n{}", e);
-                            return ExitCode::FAILURE;
-                        }
-                    }
-                }
-
-                println!("{}", hex_hash);
-                ExitCode::SUCCESS
-            }
+        } => match hash_object(&infilepath, do_write) {
+            Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
-                println!("{}", e);
+                println!("error: {}", e);
                 ExitCode::FAILURE
             }
         },
@@ -169,6 +148,32 @@ fn main() -> ExitCode {
     }
 }
 
+fn hash_object<P: AsRef<Path>>(path: P, do_write: bool) -> Result<()> {
+    let mut infile = File::open(path).context("opening file for hashing")?;
+    let hash = hash_file(&infile);
+    let hex_hash = hex::encode(hash);
+
+    if do_write {
+        let obj_db_path = obj_path_from_sha(&hex_hash);
+
+        if !obj_db_path.exists() {
+            infile
+                .rewind()
+                .expect("start reading given file from beginning to copy into obj db");
+
+    let filesz = infile
+        .metadata()
+        .context("get input file metadata, for size")?
+        .len();
+
+            encode_object(&mut infile, filesz, obj_db_path).context("encoding object into database")?;
+        }
+    }
+
+    println!("{}", hex_hash);
+    Ok(())
+}
+
 fn is_plausibly_obj_sha(maybe_obj_sha: &str) -> bool {
     maybe_obj_sha.len() == 40 && maybe_obj_sha.chars().all(|c| c.is_ascii_hexdigit())
 }
@@ -198,12 +203,8 @@ fn hash_file(mut f: &File) -> [u8; 20] {
     *h.as_mut()
 }
 
-fn encode_object<P: AsRef<Path>>(input: &mut File, obj_db_path: P) -> Result<()> {
+fn encode_object<P: AsRef<Path>, R: Read>(mut input: R, filesz: u64, obj_db_path: P) -> Result<()> {
     let obj_db_path = obj_db_path.as_ref();
-    let filesz = input
-        .metadata()
-        .context("get input file metadata, for size")?
-        .len();
 
     let obj_db_dir = obj_db_path.parent().with_context(|| {
         format!(
@@ -235,7 +236,7 @@ fn encode_object<P: AsRef<Path>>(input: &mut File, obj_db_path: P) -> Result<()>
         .write_all(header.as_bytes())
         .context("write header to object file in db")?;
 
-    std::io::copy(input, &mut compressedout)
+    std::io::copy(&mut input, &mut compressedout)
         .context("copying given file's contents to object in db")?;
 
     {
