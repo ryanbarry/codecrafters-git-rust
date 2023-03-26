@@ -27,4 +27,5 @@ pub enum Commands {
         #[arg(value_name = "tree-ish")]
         tree_ish: String,
     },
+    WriteTree,
 }

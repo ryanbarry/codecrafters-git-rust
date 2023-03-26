@@ -5,6 +5,7 @@ use std::process::ExitCode;
 use std::str::FromStr;
 
 use anyhow::{ensure, Context, Result};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use clap::Parser;
 use flate2::{read::ZlibDecoder, write::ZlibEncoder};
 
@@ -57,7 +58,11 @@ fn main() -> ExitCode {
             write: do_write,
             file: infilepath,
         } => match hash_object(&infilepath, do_write) {
-            Ok(()) => ExitCode::SUCCESS,
+            Ok(hash) => {
+                let hex_hash = hex::encode(hash);
+                println!("{}", hex_hash);
+                ExitCode::SUCCESS
+            }
             Err(e) => {
                 println!("error: {}", e);
                 ExitCode::FAILURE
@@ -76,7 +81,6 @@ fn main() -> ExitCode {
                         loop {
                             let mode: TreeObjMode;
                             let otype: ObjType;
-                            let name: String;
 
                             match reader.read_until(b' ', &mut pnbuf) {
                                 Ok(0) => {
@@ -97,14 +101,14 @@ fn main() -> ExitCode {
                             };
                             pnbuf.clear();
 
-                            match reader.read_until(b'\0', &mut pnbuf) {
+                            let name: String = match reader.read_until(b'\0', &mut pnbuf) {
                                 Ok(0) => {
                                     // EOF
                                     break;
                                 }
                                 Ok(_nbytes) => {
                                     pnbuf.pop();
-                                    name = String::from_utf8_lossy(&pnbuf).into();
+                                    String::from_utf8_lossy(&pnbuf).into()
                                 }
                                 Err(e) => {
                                     panic!("failed to read the name after the tree entry's permissions: {}", e);
@@ -145,12 +149,68 @@ fn main() -> ExitCode {
 
             ExitCode::FAILURE
         }
+        Commands::WriteTree => {
+            let cur_dir = std::env::current_dir().expect("read cwd");
+            let git_dir = {
+                let mut d = cur_dir.clone();
+                d.push(".git");
+                d
+            };
+            assert!(
+                git_dir.exists() && git_dir.is_dir(),
+                "expect to be run in directory with .git"
+            );
+
+            fn write_tree_recursive(path: &Path) -> Vec<TreeEntry> {
+                let mut res = vec![];
+                for ent in path.read_dir().expect("to read cwd") {
+                    let ent = ent.expect("to be able to read every file");
+                    if ent.file_name() == ".git" {
+                        continue;
+                    }
+                    let ent = ent.path();
+                    let entry_type: ObjType;
+                    let entry_mode: TreeObjMode;
+                    let entry_hash: [u8; 20];
+                    if ent.is_dir() {
+                        let tree = write_tree_recursive(&ent);
+                        entry_hash = hash_tree(tree).expect("to hash every entry");
+                        entry_type = ObjType::Tree;
+                        entry_mode = TreeObjMode::Directory;
+                    } else {
+                        entry_hash = hash_object(&ent, true).expect("to hash every entry");
+                        entry_type = ObjType::Blob;
+                        entry_mode = TreeObjMode::RegularFile;
+                    }
+                    res.push(TreeEntry {
+                        name: ent
+                            .file_name()
+                            .unwrap_or_else(|| panic!(
+                                "entry `{}` has a file name since it isn't a dir",
+                                ent.to_string_lossy()))
+                            .to_string_lossy()
+                            .to_string(),
+                        hash: entry_hash,
+                        mode: entry_mode,
+                        otype: entry_type,
+                    })
+                }
+                res
+            }
+
+            let tree = write_tree_recursive(&cur_dir);
+            let hash = hash_tree(tree).expect("to insert a tree object for the current dir");
+
+            println!("{}", hex::encode(hash));
+
+            ExitCode::SUCCESS
+        }
     }
 }
 
-fn hash_object<P: AsRef<Path>>(path: P, do_write: bool) -> Result<()> {
+fn hash_object<P: AsRef<Path>>(path: P, do_write: bool) -> Result<[u8; 20]> {
     let mut infile = File::open(path).context("opening file for hashing")?;
-    let hash = hash_file(&infile);
+    let hash = hash_file(&infile)?;
     let hex_hash = hex::encode(hash);
 
     if do_write {
@@ -161,17 +221,17 @@ fn hash_object<P: AsRef<Path>>(path: P, do_write: bool) -> Result<()> {
                 .rewind()
                 .expect("start reading given file from beginning to copy into obj db");
 
-    let filesz = infile
-        .metadata()
-        .context("get input file metadata, for size")?
-        .len();
+            let filesz = infile
+                .metadata()
+                .context("get input file metadata, for size")?
+                .len();
 
-            encode_object(&mut infile, filesz, obj_db_path).context("encoding object into database")?;
+            encode_object(ObjType::Blob, &mut infile, filesz, obj_db_path)
+                .context("encoding object into database")?;
         }
     }
 
-    println!("{}", hex_hash);
-    Ok(())
+    Ok(hash)
 }
 
 fn is_plausibly_obj_sha(maybe_obj_sha: &str) -> bool {
@@ -185,7 +245,7 @@ fn obj_path_from_sha(obj_sha: &str) -> PathBuf {
         .collect()
 }
 
-fn hash_file(mut f: &File) -> [u8; 20] {
+fn hash_file(mut f: &File) -> Result<[u8; 20]> {
     use sha1::{Digest, Sha1};
 
     let mut hasher = Sha1::new_with_prefix("blob ");
@@ -193,17 +253,50 @@ fn hash_file(mut f: &File) -> [u8; 20] {
     hasher.update(filesz.to_string());
     hasher.update([0u8]);
     let mut buf = [0u8; 1024];
-    let mut bytes_read = f.read(&mut buf).expect("read given file for hashing");
+    let mut bytes_read = f.read(&mut buf).context("read given file for hashing")?;
     while bytes_read > 0 {
         hasher.update(&buf[..bytes_read]);
-        bytes_read = f.read(&mut buf).expect("read given file for hashing");
+        bytes_read = f.read(&mut buf).context("read given file for hashing")?;
     }
 
     let mut h = hasher.finalize();
-    *h.as_mut()
+    Ok(*h.as_mut())
 }
 
-fn encode_object<P: AsRef<Path>, R: Read>(mut input: R, filesz: u64, obj_db_path: P) -> Result<()> {
+fn hash_tree(tree: Vec<TreeEntry>) -> Result<[u8; 20]> {
+    use sha1::{Digest, Sha1};
+
+    let mut buf = BytesMut::with_capacity(tree.len() * 48);
+    for ent in tree {
+        buf.put_slice(&ent.mode.as_bytes());
+        buf.put_u8(b' ');
+        buf.put_slice(ent.name.as_bytes());
+        buf.put_u8(b'\0');
+        buf.put_slice(&ent.hash);
+    }
+    let buf = buf.freeze();
+    let bufsz = buf.len();
+    let bufsz_str = bufsz.to_string();
+
+    let mut header = Vec::with_capacity(5 + bufsz_str.len() + 1);
+    header.extend_from_slice(b"tree ");
+    header.extend_from_slice(bufsz_str.as_bytes());
+    header.push(b'\0');
+
+    let mut hasher = Sha1::new_with_prefix(header);
+    hasher.update(&buf);
+    let hash = *hasher.finalize().as_mut();
+    let hex_hash = hex::encode(hash);
+
+    let obj_db_path = obj_path_from_sha(&hex_hash);
+    if !obj_db_path.exists() {
+        encode_object(ObjType::Tree, buf.reader(), bufsz.try_into().unwrap(), obj_db_path)
+            .context("encoding tree into db")?;
+    }
+    Ok(hash)
+}
+
+fn encode_object<P: AsRef<Path>, R: Read>(otype: ObjType, mut input: R, filesz: u64, obj_db_path: P) -> Result<()> {
     let obj_db_path = obj_db_path.as_ref();
 
     let obj_db_dir = obj_db_path.parent().with_context(|| {
@@ -228,7 +321,7 @@ fn encode_object<P: AsRef<Path>, R: Read>(mut input: R, filesz: u64, obj_db_path
         .open(obj_db_path)
         .context("Failed to open file for writing object to db")?;
 
-    let header = format!("blob {}\0", filesz);
+    let header = format!("{} {}\0", otype.type_name(), filesz);
 
     let mut compressedout = ZlibEncoder::new(outputfile, flate2::Compression::default());
 
@@ -300,6 +393,14 @@ impl TreeObjMode {
             unk => {
                 unimplemented!("unknown object type: {:o}", unk);
             }
+        }
+    }
+
+    fn as_bytes(&self) -> Bytes {
+        match &self {
+            Self::RegularFile => Bytes::from_static(b"100644"),
+            Self::Directory => Bytes::from_static(b"40000"),
+            _ => unimplemented!(),
         }
     }
 }
