@@ -91,8 +91,9 @@ fn main() -> ExitCode {
                                     mode = TreeObjMode::from(&pnbuf);
                                     otype = match mode {
                                         TreeObjMode::Directory => ObjType::Tree,
-                                        TreeObjMode::Link => ObjType::Blob,
-                                        TreeObjMode::RegularFile => ObjType::Blob,
+                                        TreeObjMode::RegularFile
+                                        | TreeObjMode::ExecutableFile
+                                        | TreeObjMode::Link => ObjType::Blob,
                                     };
                                 }
                                 Err(e) => {
@@ -164,11 +165,8 @@ fn main() -> ExitCode {
             fn write_tree_recursive(path: &Path) -> Vec<TreeEntry> {
                 let mut res = vec![];
                 let sorted_dirents = {
-                    let mut dirents : Vec<std::fs::DirEntry> = path
-                    .read_dir()
-                    .unwrap()
-                    .map(|re| re.unwrap())
-                    .collect();
+                    let mut dirents: Vec<std::fs::DirEntry> =
+                        path.read_dir().unwrap().map(|re| re.unwrap()).collect();
                     dirents.sort_by_key(|enta| enta.file_name());
                     dirents
                 };
@@ -395,8 +393,9 @@ trait DbObj {}
 
 #[derive(Debug)]
 enum TreeObjMode {
-    RegularFile,
     Directory,
+    RegularFile,
+    ExecutableFile,
     Link,
 }
 
