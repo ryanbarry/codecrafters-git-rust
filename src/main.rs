@@ -163,8 +163,16 @@ fn main() -> ExitCode {
 
             fn write_tree_recursive(path: &Path) -> Vec<TreeEntry> {
                 let mut res = vec![];
-                for ent in path.read_dir().expect("to read cwd") {
-                    let ent = ent.expect("to be able to read every file");
+                let sorted_dirents = {
+                    let mut dirents : Vec<std::fs::DirEntry> = path
+                    .read_dir()
+                    .unwrap()
+                    .map(|re| re.unwrap())
+                    .collect();
+                    dirents.sort_by_key(|enta| enta.file_name());
+                    dirents
+                };
+                for ent in sorted_dirents {
                     if ent.file_name() == ".git" {
                         continue;
                     }
