@@ -498,6 +498,7 @@ trait DbObj {}
 enum TreeObjMode {
     Directory,
     RegularFile,
+    #[allow(dead_code)]
     ExecutableFile,
     Link,
 }
