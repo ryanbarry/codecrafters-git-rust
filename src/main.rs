@@ -364,9 +364,9 @@ fn hash_commit(commit: &Commit) -> Result<[u8; 20]> {
             + commit.committer_name.len()
             + 1 // 0x20
             + 16 // committer timestamp
-            + 1 // 0x0A
+            + 2 // double 0x0A
             + commit.message.len()
-            + 1,
+            + 1, // 0x0A
     );
 
     buf.put_slice(b"tree");
@@ -390,6 +390,7 @@ fn hash_commit(commit: &Commit) -> Result<[u8; 20]> {
     buf.put_u8(0x20);
     buf.put_slice(commit.committer_timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs().to_string().as_bytes());
     buf.put_slice(b" +0000");
+    buf.put_u8(0x0a);
     buf.put_u8(0x0a);
     buf.put_slice(commit.message.as_bytes());
     buf.put_u8(0x0a);
