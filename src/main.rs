@@ -149,7 +149,7 @@ fn main() -> ExitCode {
                 }
             }
 
-            ExitCode::FAILURE
+            ExitCode::SUCCESS
         }
         Commands::WriteTree => {
             let cur_dir = std::env::current_dir().expect("read cwd");
