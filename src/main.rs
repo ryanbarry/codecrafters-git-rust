@@ -382,12 +382,14 @@ fn hash_commit(commit: &Commit) -> Result<[u8; 20]> {
     buf.put_slice(commit.author_name.as_bytes());
     buf.put_u8(0x20);
     buf.put_slice(commit.author_timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs().to_string().as_bytes());
+    buf.put_slice(b" +0000");
     buf.put_u8(0x0a);
     buf.put_slice(b"committer");
     buf.put_u8(0x20);
     buf.put_slice(commit.committer_name.as_bytes());
     buf.put_u8(0x20);
     buf.put_slice(commit.committer_timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs().to_string().as_bytes());
+    buf.put_slice(b" +0000");
     buf.put_u8(0x0a);
     buf.put_slice(commit.message.as_bytes());
     buf.put_u8(0x0a);
