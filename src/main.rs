@@ -175,13 +175,13 @@ fn main() -> ExitCode {
             parent_sha,
             message,
         } => {
-            assert_eq!(parent_sha.len(), 20, "parent commit sha must be 20 hex chars");
-            assert_eq!(tree_sha.len(), 20, "tree sha must be 20 hex chars");
+            assert_eq!(parent_sha.len(), 40, "parent commit sha must be 20 hex chars");
+            assert_eq!(tree_sha.len(), 40, "tree sha must be 20 hex chars");
 
             let mut tree = [0u8; 20];
-            tree.copy_from_slice(tree_sha.as_bytes());
+            hex::decode_to_slice(tree_sha, &mut tree).expect("could not decode tree sha");
             let mut parent = [0u8; 20];
-            parent.copy_from_slice(parent_sha.as_bytes());
+            hex::decode_to_slice(parent_sha, &mut parent).expect("could not decode parent sha");
 
             let c = Commit {
                 author_name: "Test User <test@user.net>".to_string(),
