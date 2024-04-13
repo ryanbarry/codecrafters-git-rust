@@ -3,6 +3,7 @@ use std::io::{BufRead, BufReader, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
+use std::time::SystemTime;
 
 use anyhow::{ensure, Context, Result};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -162,51 +163,6 @@ fn main() -> ExitCode {
                 "expect to be run in directory with .git"
             );
 
-            fn write_tree_recursive(path: &Path) -> Vec<TreeEntry> {
-                let mut res = vec![];
-                let sorted_dirents = {
-                    let mut dirents: Vec<std::fs::DirEntry> =
-                        path.read_dir().unwrap().map(|re| re.unwrap()).collect();
-                    dirents.sort_by_key(|enta| enta.file_name());
-                    dirents
-                };
-                for ent in sorted_dirents {
-                    if ent.file_name() == ".git" {
-                        continue;
-                    }
-                    let ent = ent.path();
-                    let entry_type: ObjType;
-                    let entry_mode: TreeObjMode;
-                    let entry_hash: [u8; 20];
-                    if ent.is_dir() {
-                        let tree = write_tree_recursive(&ent);
-                        entry_hash = hash_tree(tree).expect("to hash every entry");
-                        entry_type = ObjType::Tree;
-                        entry_mode = TreeObjMode::Directory;
-                    } else {
-                        entry_hash = hash_object(&ent, true).expect("to hash every entry");
-                        entry_type = ObjType::Blob;
-                        entry_mode = TreeObjMode::RegularFile;
-                    }
-                    res.push(TreeEntry {
-                        name: ent
-                            .file_name()
-                            .unwrap_or_else(|| {
-                                panic!(
-                                    "entry `{}` has a file name since it isn't a dir",
-                                    ent.to_string_lossy()
-                                )
-                            })
-                            .to_string_lossy()
-                            .to_string(),
-                        hash: entry_hash,
-                        mode: entry_mode,
-                        otype: entry_type,
-                    })
-                }
-                res
-            }
-
             let tree = write_tree_recursive(&cur_dir);
             let hash = hash_tree(tree).expect("to insert a tree object for the current dir");
 
@@ -214,8 +170,38 @@ fn main() -> ExitCode {
 
             ExitCode::SUCCESS
         }
+        Commands::CommitTree {
+            tree_sha,
+            parent_sha,
+            message,
+        } => {
+            assert_eq!(parent_sha.len(), 20, "parent commit sha must be 20 hex chars");
+            assert_eq!(tree_sha.len(), 20, "tree sha must be 20 hex chars");
+
+            let mut tree = [0u8; 20];
+            tree.copy_from_slice(tree_sha.as_bytes());
+            let mut parent = [0u8; 20];
+            parent.copy_from_slice(parent_sha.as_bytes());
+
+            let c = Commit {
+                author_name: "Test User <test@user.net>".to_string(),
+                author_timestamp: SystemTime::now(),
+                committer_name: "Test User <test@user.net>".to_string(),
+                committer_timestamp: SystemTime::now(),
+                tree,
+                parent,
+                message,
+            };
+
+            let hash = hash_commit(&c).expect("failed creating the commit object");
+
+            println!("{}", hex::encode(hash));
+
+            ExitCode::SUCCESS
+        }
     }
 }
+
 
 fn hash_object<P: AsRef<Path>>(path: P, do_write: bool) -> Result<[u8; 20]> {
     let mut infile = File::open(path).context("opening file for hashing")?;
@@ -301,6 +287,120 @@ fn hash_tree(tree: Vec<TreeEntry>) -> Result<[u8; 20]> {
     if !obj_db_path.exists() {
         encode_object(
             ObjType::Tree,
+            buf.reader(),
+            bufsz.try_into().unwrap(),
+            obj_db_path,
+        )
+        .context("encoding tree into db")?;
+    }
+    Ok(hash)
+}
+
+fn write_tree_recursive(path: &Path) -> Vec<TreeEntry> {
+    let mut res = vec![];
+    let sorted_dirents = {
+        let mut dirents: Vec<std::fs::DirEntry> =
+            path.read_dir().unwrap().map(|re| re.unwrap()).collect();
+        dirents.sort_by_key(|enta| enta.file_name());
+        dirents
+    };
+    for ent in sorted_dirents {
+        if ent.file_name() == ".git" {
+            continue;
+        }
+        let ent = ent.path();
+        let entry_type: ObjType;
+        let entry_mode: TreeObjMode;
+        let entry_hash: [u8; 20];
+        if ent.is_dir() {
+            let tree = write_tree_recursive(&ent);
+            entry_hash = hash_tree(tree).expect("to hash every entry");
+            entry_type = ObjType::Tree;
+            entry_mode = TreeObjMode::Directory;
+        } else {
+            entry_hash = hash_object(&ent, true).expect("to hash every entry");
+            entry_type = ObjType::Blob;
+            entry_mode = TreeObjMode::RegularFile;
+        }
+        res.push(TreeEntry {
+            name: ent
+                .file_name()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "entry `{}` has a file name since it isn't a dir",
+                        ent.to_string_lossy()
+                    )
+                })
+                .to_string_lossy()
+                .to_string(),
+            hash: entry_hash,
+            mode: entry_mode,
+            otype: entry_type,
+        })
+    }
+    res
+}
+
+fn hash_commit(commit: &Commit) -> Result<[u8; 20]> {
+    use sha1::{Digest, Sha1};
+
+    let mut buf = BytesMut::with_capacity(
+        4 // "tree"
+            + 1 // 0x20
+            + commit.tree.len() * 2
+            + 1 // 0x0A
+            + 6 // "parent"
+            + 1 // 0x20
+            + commit.parent.len() * 2
+            + 1 // 0x0A
+            + 6 // "author"
+            + 1 // 0x20
+            + commit.author_name.len()
+            + 1 // 0x20
+            + 16 // author timestamp
+            + 1 // 0x0A
+            + 9 // "committer"
+            + 1 // 0x20
+            + commit.committer_name.len()
+            + 1 // 0x20
+            + 16 // committer timestamp
+            + 1 // 0x0A
+            + commit.message.len()
+            + 1,
+    );
+
+    buf.put_slice(b"tree");
+    buf.put_u8(0x20);
+    buf.put_slice(hex::encode(commit.tree).as_bytes());
+    buf.put_u8(0x0a);
+    buf.put_slice(b"parent");
+    buf.put_u8(0x20);
+    buf.put_slice(hex::encode(commit.parent).as_bytes());
+    buf.put_u8(0x0a);
+    buf.put_slice(b"author");
+    buf.put_u8(0x20);
+    buf.put_slice(commit.author_name.as_bytes());
+    buf.put_u8(0x20);
+    buf.put_slice(commit.author_timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs().to_string().as_bytes());
+    buf.put_u8(0x0a);
+    buf.put_slice(b"committer");
+    buf.put_u8(0x20);
+    buf.put_slice(commit.committer_name.as_bytes());
+    buf.put_u8(0x20);
+    buf.put_slice(commit.committer_timestamp.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs().to_string().as_bytes());
+    buf.put_u8(0x0a);
+    buf.put_slice(commit.message.as_bytes());
+    buf.put_u8(0x0a);
+
+    let bufsz = buf.len();
+    let hasher = Sha1::new_with_prefix(&buf);
+    let hash = *hasher.finalize().as_mut();
+    let hex_hash = hex::encode(hash);
+
+    let obj_db_path = obj_path_from_sha(&hex_hash);
+    if !obj_db_path.exists() {
+        encode_object(
+            ObjType::Commit,
             buf.reader(),
             bufsz.try_into().unwrap(),
             obj_db_path,
@@ -454,7 +554,17 @@ impl std::fmt::Display for TreeEntry {
         )
     }
 }
-//struct Commit {}
+
+struct Commit {
+    tree: [u8; 20],
+    parent: [u8; 20],
+    author_name: String,
+    author_timestamp: SystemTime,
+    committer_name: String,
+    committer_timestamp: SystemTime,
+    message: String,
+}
+
 //struct Tag {}
 
 fn object_decoder(object: File) -> (ObjType, usize, BufReader<ZlibDecoder<File>>) {

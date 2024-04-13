@@ -28,4 +28,12 @@ pub enum Commands {
         tree_ish: String,
     },
     WriteTree,
+    CommitTree {
+        #[arg()]
+        tree_sha: String,
+        #[arg(short)]
+        parent_sha: String,
+        #[arg(short)]
+        message: String,
+    },
 }
