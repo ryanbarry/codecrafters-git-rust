@@ -1,0 +1,5 @@
+[toolchain]
+#channel = "nightly-2024-10-16"
+channel = "1.82.0"
+components = [ "rust-analysis", "rust-src", "rustfmt", "llvm-tools" ]
+#targets = [ "x86_64-unknown-none", "x86_64-unknown-linux-gnu" ]
